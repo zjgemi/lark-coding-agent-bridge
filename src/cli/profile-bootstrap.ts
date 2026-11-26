@@ -14,6 +14,7 @@ export interface BootstrapProfileInput {
   workspace?: string;
   defaultWorkspace?: string;
   codexBinaryPath?: string;
+  piBinaryPath?: string;
   profileDir?: string;
 }
 
@@ -29,12 +30,15 @@ export async function createBootstrapProfileConfig(
     input.agentKind === 'codex'
       ? await createBootstrapCodexConfig(input.codexBinaryPath)
       : undefined;
+  const pi =
+    input.agentKind === 'pi' ? await createBootstrapPiConfig(input.piBinaryPath) : undefined;
   const profile = createDefaultProfileConfig({
     agentKind: input.agentKind,
     accounts: input.accounts,
     preferences: input.preferences,
     secrets: input.secrets,
     ...(codex ? { codex } : {}),
+    ...(pi ? { pi } : {}),
   });
   if (workspace) {
     profile.workspaces = {
@@ -61,24 +65,39 @@ async function ensureManagedDefaultWorkspace(path: string): Promise<string> {
 
 export async function createBootstrapCodexConfig(binaryPath: string | undefined) {
   const command = binaryPath ?? process.env.LARK_CHANNEL_CODEX_BIN ?? 'codex';
-  let resolvedBinary: string;
+  return { binaryPath: await resolveBootstrapBinary('codex', 'Codex CLI', command) };
+}
+
+export async function createBootstrapPiConfig(binaryPath: string | undefined) {
+  const command = binaryPath ?? process.env.LARK_CHANNEL_PI_BIN ?? 'pi';
+  return { binaryPath: await resolveBootstrapBinary('pi', 'Pi', command) };
+}
+
+/**
+ * Resolve the agent binary for a freshly bootstrapped profile, raising a
+ * preflight diagnostic (rather than a bare ENOENT) when it can't be found.
+ */
+async function resolveBootstrapBinary(
+  agentId: 'codex' | 'pi',
+  agentName: string,
+  command: string,
+): Promise<string> {
   try {
-    resolvedBinary = await resolveExecutablePath(command);
+    return await resolveExecutablePath(command);
   } catch (err) {
     const errno = (err as NodeJS.ErrnoException).code;
     throw new AgentPreflightError({
-      code: codexBootstrapBinaryErrorCode(errno),
-      agentId: 'codex',
-      agentName: 'Codex CLI',
+      code: bootstrapBinaryErrorCode(errno),
+      agentId,
+      agentName,
       command,
       binaryPath: command,
       errno,
     });
   }
-  return { binaryPath: resolvedBinary };
 }
 
-function codexBootstrapBinaryErrorCode(errno: string | undefined) {
+function bootstrapBinaryErrorCode(errno: string | undefined) {
   if (errno === 'EACCES' || errno === 'EPERM') return 'agent-binary-not-executable';
   if (errno === 'ELOOP' || errno === 'ENOTDIR' || errno === 'EINVAL') {
     return 'agent-binary-resolve-failed';

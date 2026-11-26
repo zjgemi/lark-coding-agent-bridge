@@ -1,6 +1,6 @@
 # lark-channel-bridge
 
-A lightweight bot that bridges Feishu / Lark messenger with your local Claude Code or Codex CLI. Run one command, scan a QR code to bind a PersonalAgent app, and talk to your local coding agent from chat.
+A lightweight bot that bridges Feishu / Lark messenger with your local Claude Code, Codex CLI or Pi. Run one command, scan a QR code to bind a PersonalAgent app, and talk to your local coding agent from chat.
 
 [中文 README](./README.zh.md)
 
@@ -8,7 +8,7 @@ For a product walkthrough, see the [Feishu document](https://larkcommunity.feish
 
 ## What it does
 
-- Forwards Feishu / Lark messages to local Claude Code or Codex CLI. Send a DM directly, or `@bot` in a group.
+- Forwards Feishu / Lark messages to a local Claude Code, Codex CLI or Pi agent. Send a DM directly, or `@bot` in a group.
 - **Streaming card**: text replies and tool calls update on one Lark card in real time.
 - **COT process messages**: optionally send a process message with agent progress text and tool calls, then send the final answer separately.
 - **Session continuity**: each chat, topic, or document comment thread keeps its own session.
@@ -23,6 +23,7 @@ For a product walkthrough, see the [Feishu document](https://larkcommunity.feish
 - At least one local agent installed and logged in:
   - Claude Code: `claude`, see https://docs.anthropic.com/en/docs/claude-code/quickstart
   - Codex CLI: `codex`, see https://developers.openai.com/codex/cli
+  - Pi: `pi`, see https://pi.dev
 - A Feishu / Lark **PersonalAgent** app. The first-run QR wizard can create and bind one for you.
 
 ## Install
@@ -88,13 +89,14 @@ Platform mapping:
 
 Daemon logs are under `~/.lark-channel/profiles/<profile>/logs/daemon/`.
 
-### Multiple profiles: Claude and Codex
+### Multiple profiles: Claude, Codex and Pi
 
 By default, the bridge starts with the currently selected profile. Use `profile use <name>` to change it. Each profile keeps its own app credentials, sessions, working directories, and logs. Create multiple profiles only when you need to connect multiple PersonalAgent apps, or run Claude and Codex as separate bots:
 
 ```bash
 lark-channel-bridge start --profile claude --agent claude
 lark-channel-bridge start --profile codex --agent codex
+lark-channel-bridge start --profile pi --agent pi
 ```
 
 For example, to restart only the Codex bot:
@@ -109,8 +111,8 @@ lark-channel-bridge status --profile codex
 ### Host CLI
 
 ```text
-lark-channel-bridge run [--profile <name>] [--agent claude|codex] [--workspace <path>] [-c <config>]
-lark-channel-bridge migrate [--profile <name>] [--agent claude|codex]
+lark-channel-bridge run [--profile <name>] [--agent claude|codex|pi] [--workspace <path>] [-c <config>]
+lark-channel-bridge migrate [--profile <name>] [--agent claude|codex|pi]
 lark-channel-bridge ps
 lark-channel-bridge kill <id|#>
 lark-channel-bridge --help
@@ -121,6 +123,7 @@ lark-channel-bridge --help
 ```bash
 lark-channel-bridge profile create claude --agent claude
 lark-channel-bridge profile create codex --agent codex
+lark-channel-bridge profile create pi --agent pi
 lark-channel-bridge profile list
 lark-channel-bridge profile use <name>
 lark-channel-bridge profile remove <name>
@@ -210,11 +213,34 @@ This is a profile-field snippet. Do not replace the whole `config.json` with it;
 
 Mode mapping:
 
-| Bridge access | Claude permission mode | Codex mode |
-|---|---|---|
-| `full` | `bypassPermissions` | `danger-full-access` |
-| `workspace` | `acceptEdits` | `workspace-write` |
-| `read-only` | `plan` | `read-only` |
+| Bridge access | Claude permission mode | Codex mode | Pi |
+|---|---|---|---|
+| `full` | `bypassPermissions` | `danger-full-access` | default tools (`read`, `bash`, `edit`, `write`) |
+| `workspace` | `acceptEdits` | `workspace-write` | default tools (`read`, `bash`, `edit`, `write`) |
+| `read-only` | `plan` | `read-only` | `--tools read,grep,find,ls` |
+
+Pi has no sandbox flag of its own, so the bridge enforces `read-only` by narrowing Pi's tool allowlist to read-only inspection tools.
+
+### Pi profile settings
+
+A `pi` profile stores the resolved `pi` binary and, optionally, which Pi config directory the child process should use. By default the agent inherits the user's own `~/.pi/agent` so the existing login and model catalog are reused.
+
+```json
+{
+  "pi": {
+    "binaryPath": "/usr/local/bin/pi",
+    "agentDir": "/Users/me/.pi/agent",
+    "inheritAgentDir": true,
+    "approveProject": true
+  }
+}
+```
+
+- `agentDir` sets `PI_CODING_AGENT_DIR` for the spawned process.
+- `inheritAgentDir: false` isolates the profile under `~/.lark-channel/profiles/<profile>/pi-agent`.
+- `approveProject: false` passes `--no-approve`, so trust-gated project-local config and resources are ignored (default: trusted, like the other adapters).
+
+The model picker offers only `跟随默认` for Pi: Pi resolves `--model` against its own provider catalog, so the bridge leaves the choice to Pi's config.
 
 The legacy `sandbox` field is still readable for old configs. After the bridge saves the profile, it migrates that setting to canonical `permissions`.
 

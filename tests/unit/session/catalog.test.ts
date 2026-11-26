@@ -192,3 +192,38 @@ function entry(
     updatedAt,
   };
 }
+
+describe('session catalog — Pi', () => {
+  afterEach(async () => {
+    await Promise.all(cleanups.splice(0).map((cleanup) => cleanup()));
+  });
+
+  it('stores Pi sessions as thread-id entries, isolated from Claude and Codex', async () => {
+    const catalog = new SessionCatalog(await path());
+    const base = { scopeId: 'chat-1', cwdRealpath: '/repo', policyFingerprint: 'fp-1' };
+    catalog.upsertActive({ ...base, agentId: 'pi', threadId: 'pi-sess-1', now: 1000 });
+
+    expect(catalog.activeFor({ ...base, agentId: 'pi' })).toMatchObject({
+      agentId: 'pi',
+      threadId: 'pi-sess-1',
+    });
+    expect(catalog.activeFor({ ...base, agentId: 'codex' })).toBeUndefined();
+    await catalog.flush();
+  });
+
+  it('rejects a Pi entry keyed by sessionId instead of threadId', async () => {
+    const catalog = new SessionCatalog(await path());
+
+    expect(() =>
+      catalog.upsertActive({
+        scopeId: 'chat-1',
+        agentId: 'pi',
+        cwdRealpath: '/repo',
+        policyFingerprint: 'fp-1',
+        sessionId: 'sess-wrong',
+        now: 1000,
+      }),
+    ).toThrow(/pi catalog entries require threadId/i);
+    await catalog.flush();
+  });
+});

@@ -4,6 +4,7 @@ import { dirname } from 'node:path';
 import { paths } from '../config/paths';
 import { log } from '../core/logger';
 import type { AgentCapabilityId } from '../agent/capability';
+import { isAgentKind } from '../config/profile-schema';
 
 export type CatalogAgentId = AgentCapabilityId;
 export type SessionCatalogStatus = 'active' | 'archived';
@@ -214,7 +215,7 @@ function normalizeEntry(input: unknown): SessionCatalogEntry | undefined {
   if (
     typeof raw.key !== 'string' ||
     typeof raw.scopeId !== 'string' ||
-    (raw.agentId !== 'claude' && raw.agentId !== 'codex') ||
+    !isAgentKind(raw.agentId) ||
     typeof raw.cwdRealpath !== 'string' ||
     typeof raw.policyFingerprint !== 'string' ||
     (raw.status !== 'active' && raw.status !== 'archived') ||
@@ -259,6 +260,8 @@ function assertAgentIdentity(input: UpsertSessionCatalogInput): void {
     return;
   }
   if (!input.threadId || input.sessionId) {
-    throw new Error('Codex catalog entries require threadId and must not include sessionId');
+    throw new Error(
+      `${input.agentId} catalog entries require threadId and must not include sessionId`,
+    );
   }
 }

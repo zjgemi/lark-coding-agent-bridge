@@ -574,3 +574,56 @@ describe('profile schema', () => {
     });
   });
 });
+
+describe('profile schema — Pi', () => {
+  const piProfile = {
+    agentKind: 'pi' as const,
+    accounts: { app },
+    pi: { binaryPath: '/usr/local/bin/pi' },
+  };
+
+  it('creates a Pi profile without a codex/agent-home requirement', () => {
+    const cfg = createDefaultProfileConfig(piProfile);
+
+    expect(cfg.agentKind).toBe('pi');
+    expect(cfg.pi).toEqual({
+      binaryPath: '/usr/local/bin/pi',
+      inheritAgentDir: true,
+      approveProject: true,
+    });
+    expect(cfg.codex).toBeUndefined();
+    // Pi has no sandbox of its own; the legacy mirror still reflects access.
+    expect(cfg.permissions).toMatchObject({ defaultAccess: 'full', maxAccess: 'full' });
+  });
+
+  it('requires the pi config block for a pi profile', () => {
+    expect(() =>
+      normalizeProfileConfig({ ...piProfile, schemaVersion: 2, pi: undefined }),
+    ).toThrow(/pi profile requires pi configuration/);
+  });
+
+  it('keeps pi agent dir and approval overrides', () => {
+    const cfg = createDefaultProfileConfig({
+      ...piProfile,
+      pi: {
+        binaryPath: '/usr/local/bin/pi',
+        agentDir: '/home/user/.pi/agent',
+        inheritAgentDir: false,
+        approveProject: false,
+      },
+    });
+
+    expect(cfg.pi).toEqual({
+      binaryPath: '/usr/local/bin/pi',
+      agentDir: '/home/user/.pi/agent',
+      inheritAgentDir: false,
+      approveProject: false,
+    });
+  });
+
+  it('rejects unknown agent kinds with the full list', () => {
+    expect(() =>
+      normalizeProfileConfig({ ...piProfile, schemaVersion: 2, agentKind: 'gemini' }),
+    ).toThrow(/agentKind must be claude, codex or pi/);
+  });
+});

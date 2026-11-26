@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute } from 'node:path';
 import type { LarkChannel, NormalizedMessage } from '@larksuite/channel';
-import { claudeCapability, codexCapability } from '../agent/capability';
+import { capabilityForProfile, type AgentCapabilityId } from '../agent/capability';
 import { DEFAULT_MODEL, normalizeModelSelection, supportedModels } from '../agent/models';
 import type { AgentAdapter } from '../agent/types';
 import type { ActiveRuns } from '../bot/active-runs';
@@ -153,7 +153,7 @@ type Handler = (args: string, ctx: CommandContext) => Promise<void>;
 
 interface ResumeCandidate {
   scopeId: string;
-  agentId: 'claude' | 'codex';
+  agentId: AgentCapabilityId;
   cwdRealpath: string;
   policyFingerprint: string;
   sessionId?: string;
@@ -557,13 +557,19 @@ async function handleResume(args: string, ctx: CommandContext): Promise<void> {
     return;
   }
 
-  if (ctx.controls.profileConfig.agentKind === 'codex') {
+  // Thread-based agents (codex, pi) resume by an opaque id kept on the session
+  // catalog instead of Claude Code's session store.
+  if (ctx.controls.profileConfig.agentKind !== 'claude') {
+    const agentKind = ctx.controls.profileConfig.agentKind;
     const identity = ctx.sessionCatalogIdentity;
     const entry =
       ctx.sessionCatalog && identity
         ? ctx.sessionCatalog.activeFor(identity)
         : undefined;
-    const history = identity ? await listCodexResumeHistory(ctx, cwd, limit) : [];
+    // Only Codex exposes a history listing; Pi sessions are offered by their
+    // catalog id (the active one), since Pi's session store is per agent dir.
+    const history =
+      identity && agentKind === 'codex' ? await listCodexResumeHistory(ctx, cwd, limit) : [];
     if (history.length > 0 && identity) {
       const entries = history.map((thread) => {
         const nonce = issueResumeCandidate(identity, { threadId: thread.threadId });
@@ -581,9 +587,10 @@ async function handleResume(args: string, ctx: CommandContext): Promise<void> {
     }
     if (entry?.threadId && identity) {
       const nonce = issueResumeCandidate(identity, { threadId: entry.threadId });
+      const label = agentKind === 'codex' ? 'Codex thread' : 'Pi 会话';
       await reply(
         ctx,
-        `当前 Codex thread 可恢复。\n使用 \`/resume use ${nonce}\` 恢复（10 分钟内有效）。`,
+        `当前 ${label} 可恢复。\n使用 \`/resume use ${nonce}\` 恢复（10 分钟内有效）。`,
       );
       return;
     }
@@ -615,10 +622,10 @@ async function applyResume(sessionId: string, ctx: CommandContext): Promise<void
     const resolved = consumeResumeCandidate(sessionId, ctx.sessionCatalogIdentity);
     if (resolved) {
       ctx.activeRuns.interrupt(ctx.scope);
-      if (ctx.sessionCatalogIdentity.agentId === 'codex') {
+      if (ctx.sessionCatalogIdentity.agentId !== 'claude') {
         ctx.sessionCatalog.upsertActive({
           scopeId: ctx.sessionCatalogIdentity.scopeId,
-          agentId: 'codex',
+          agentId: ctx.sessionCatalogIdentity.agentId,
           cwdRealpath: ctx.sessionCatalogIdentity.cwdRealpath,
           policyFingerprint: ctx.sessionCatalogIdentity.policyFingerprint,
           threadId: resolved.threadId!,
@@ -636,7 +643,7 @@ async function applyResume(sessionId: string, ctx: CommandContext): Promise<void
       await reply(ctx, RESUME_APPLIED_REPLY);
       return;
     }
-    if (ctx.sessionCatalogIdentity.agentId === 'codex') {
+    if (ctx.sessionCatalogIdentity.agentId !== 'claude') {
       await reply(ctx, '当前上下文不可恢复这个会话，请先用 `/resume` 重新生成恢复候选。');
       return;
     }
@@ -653,8 +660,10 @@ async function applyResume(sessionId: string, ctx: CommandContext): Promise<void
     return;
   }
 
-  if (ctx.controls.profileConfig.agentKind === 'codex') {
-    await reply(ctx, '当前上下文没有可恢复的 Codex thread，请先在当前工作区完成一次运行。');
+  if (ctx.controls.profileConfig.agentKind !== 'claude') {
+    const label =
+      ctx.controls.profileConfig.agentKind === 'codex' ? 'Codex thread' : 'Pi 会话';
+    await reply(ctx, `当前上下文没有可恢复的 ${label}，请先在当前工作区完成一次运行。`);
     return;
   }
 
@@ -700,7 +709,7 @@ function consumeResumeCandidate(
     candidate.cwdRealpath !== identity.cwdRealpath ||
     candidate.policyFingerprint !== identity.policyFingerprint ||
     (identity.agentId === 'claude' && !candidate.sessionId) ||
-    (identity.agentId === 'codex' && !candidate.threadId)
+    (identity.agentId !== 'claude' && !candidate.threadId)
   ) {
     return undefined;
   }
@@ -762,19 +771,28 @@ function selectedResumeCwd(ctx: CommandContext): string | undefined {
 function runtimeAccessStatus(
   profileConfig: ProfileConfig,
 ): { label: string; value: string } {
-  if (profileConfig.agentKind === 'claude') {
-    return {
-      label: 'permission',
-      value: accessToClaudePermissionMode(
-        profileConfig.permissions.defaultAccess,
-        profileConfig.permissions,
-      ),
-    };
+  switch (profileConfig.agentKind) {
+    case 'claude':
+      return {
+        label: 'permission',
+        value: accessToClaudePermissionMode(
+          profileConfig.permissions.defaultAccess,
+          profileConfig.permissions,
+        ),
+      };
+    case 'pi':
+      // Pi has no native sandbox; the access mode is what the adapter enforces
+      // via its tool allowlist.
+      return {
+        label: 'access',
+        value: `${profileConfig.permissions.defaultAccess}/${profileConfig.permissions.maxAccess}`,
+      };
+    case 'codex':
+      return {
+        label: 'sandbox',
+        value: `${profileConfig.sandbox.defaultMode}/${profileConfig.sandbox.maxMode}`,
+      };
   }
-  return {
-    label: 'sandbox',
-    value: `${profileConfig.sandbox.defaultMode}/${profileConfig.sandbox.maxMode}`,
-  };
 }
 
 async function larkCliStatus(ctx: CommandContext): Promise<'app' | 'user-ready' | 'user-missing' | 'check-failed'> {
@@ -813,16 +831,19 @@ async function handleStatus(_args: string, ctx: CommandContext): Promise<void> {
   const cwd = effectiveWorkspaceCwd(ctx);
   const sess = ctx.sessions.getRaw(ctx.scope);
   const isCodex = ctx.controls.profileConfig.agentKind === 'codex';
+  // Agents that resume by catalog id (codex, pi) report the stored thread id
+  // instead of a Claude Code session id.
+  const usesCatalog = ctx.controls.profileConfig.agentKind !== 'claude';
   const catalogEntry =
-    isCodex && ctx.sessionCatalog && ctx.sessionCatalogIdentity
+    usesCatalog && ctx.sessionCatalog && ctx.sessionCatalogIdentity
       ? ctx.sessionCatalog.activeFor(ctx.sessionCatalogIdentity)
       : undefined;
   const card = statusCard({
     profileName: ctx.controls.profile,
     cwd,
-    sessionId: isCodex ? catalogEntry?.threadId : sess?.sessionId,
-    emptySessionText: isCodex ? '(未建立)' : undefined,
-    sessionStale: !isCodex && Boolean(cwd && sess && sess.cwd !== cwd),
+    sessionId: usesCatalog ? catalogEntry?.threadId : sess?.sessionId,
+    emptySessionText: usesCatalog ? '(未建立)' : undefined,
+    sessionStale: !usesCatalog && Boolean(cwd && sess && sess.cwd !== cwd),
     agentName: ctx.agent.displayName,
     runtimeAccess: runtimeAccessStatus(ctx.controls.profileConfig),
     larkCliStatus: await larkCliStatus(ctx),
@@ -1127,10 +1148,7 @@ async function handleDoctor(args: string, ctx: CommandContext): Promise<void> {
   }
   doctorLastByOperator.set(rateKey, now);
 
-  const capability =
-    ctx.controls.profileConfig.agentKind === 'codex'
-      ? codexCapability(ctx.controls.profileConfig)
-      : claudeCapability(ctx.controls.profileConfig);
+  const capability = capabilityForProfile(ctx.controls.profileConfig);
   const policy = evaluateRunPolicy({
     scope: {
       source: 'im',

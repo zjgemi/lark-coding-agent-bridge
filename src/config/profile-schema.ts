@@ -13,7 +13,27 @@ import {
   type PermissionSource,
 } from './permissions';
 
-export type AgentKind = 'claude' | 'codex';
+/**
+ * A local CLI coding agent the bridge can drive. Each kind gets its own
+ * adapter under `src/agent/<kind>/` and its own config block on the profile.
+ */
+export type AgentKind = 'claude' | 'codex' | 'pi';
+
+/** Every supported agent kind, in the order the pickers present them. */
+export const AGENT_KINDS: readonly AgentKind[] = ['claude', 'codex', 'pi'];
+
+/** Human-facing name for an agent kind, for CLI output and error messages. */
+export const AGENT_DISPLAY_NAMES: Record<AgentKind, string> = {
+  claude: 'Claude Code',
+  codex: 'Codex CLI',
+  pi: 'Pi',
+};
+
+/** Runtime guard for values read back from config/registry/lock files. */
+export function isAgentKind(value: unknown): value is AgentKind {
+  return value === 'claude' || value === 'codex' || value === 'pi';
+}
+
 export type SandboxMode = CodexSandboxMode;
 export type { AccessMode, PermissionConfig, PermissionSource };
 
@@ -49,6 +69,34 @@ export interface CodexConfig {
   inheritCodexHome?: boolean;
   ignoreUserConfig?: boolean;
   ignoreRules?: boolean;
+}
+
+/**
+ * Pi (`pi` CLI) profile settings. Pi has no sandbox switch of its own, so the
+ * run policy's access mode is enforced through the adapter's `--tools`
+ * allowlist instead (see `src/agent/pi/argv.ts`).
+ */
+export interface PiConfig {
+  binaryPath: string;
+  realpath?: string;
+  version?: string;
+  sha256?: string;
+  owner?: number;
+  mode?: number;
+  /**
+   * Pi config directory (`PI_CODING_AGENT_DIR`, default `~/.pi/agent`) holding
+   * credentials, settings and session transcripts. Unset inherits the user's
+   * own directory so the existing login and model catalog are reused.
+   */
+  agentDir?: string;
+  /** When false, isolate the profile under `<profileDir>/pi-agent`. */
+  inheritAgentDir?: boolean;
+  /**
+   * Trust project-local config/resources for each run (`-a`). Off means Pi
+   * ignores trust-gated project files (`--no-approve`). Defaults to true, in
+   * line with the other adapters' full-access defaults.
+   */
+  approveProject?: boolean;
 }
 
 export interface AttachmentConfig {
@@ -160,6 +208,7 @@ export interface ProfileConfig {
   permissions: PermissionConfig;
   permissionSource?: PermissionSource;
   codex?: CodexConfig;
+  pi?: PiConfig;
   attachments: AttachmentConfig;
   comments: CommentConfig;
   /** In-meeting agent settings. See {@link MeetingConfig}. */
@@ -204,6 +253,7 @@ export interface CreateDefaultProfileConfigInput {
   sandbox?: Partial<SandboxConfig>;
   permissions?: Partial<PermissionConfig>;
   codex?: CodexConfig;
+  pi?: PiConfig;
   secrets?: SecretsConfig;
 }
 
@@ -239,6 +289,7 @@ export function normalizeProfileConfig(input: unknown): ProfileConfig {
     sandbox?: Partial<SandboxConfig>;
     permissions?: Partial<PermissionConfig>;
     codex?: CodexConfig & { flags?: unknown };
+    pi?: PiConfig & { flags?: unknown };
     attachments?: Partial<AttachmentConfig>;
     comments?: unknown;
     meeting?: unknown;
@@ -248,12 +299,15 @@ export function normalizeProfileConfig(input: unknown): ProfileConfig {
   if (raw.schemaVersion !== 2) {
     throw new Error('profile schemaVersion must be 2');
   }
-  if (raw.agentKind !== 'claude' && raw.agentKind !== 'codex') {
-    throw new Error('agentKind must be claude or codex');
+  if (!isAgentKind(raw.agentKind)) {
+    throw new Error('agentKind must be claude, codex or pi');
   }
   const accounts = normalizeAccounts(raw.accounts);
   if (raw.agentKind === 'codex' && !raw.codex) {
     throw new Error('codex profile requires codex configuration');
+  }
+  if (raw.agentKind === 'pi' && !raw.pi) {
+    throw new Error('pi profile requires pi configuration');
   }
 
   const preferences = normalizePreferences(raw.preferences);
@@ -284,6 +338,7 @@ export function normalizeProfileConfig(input: unknown): ProfileConfig {
     permissions,
     permissionSource,
     ...(raw.codex ? { codex: normalizeCodex(raw.codex) } : {}),
+    ...(raw.pi ? { pi: normalizePi(raw.pi) } : {}),
     attachments: {
       maxCount: numberOr(raw.attachments?.maxCount, 10),
       maxBytes: numberOr(raw.attachments?.maxBytes, 100 * 1024 * 1024),
@@ -389,6 +444,22 @@ function normalizeCodex(input: CodexConfig & { flags?: unknown }): CodexConfig {
     ignoreRules: input.ignoreRules !== false,
   };
   return codex;
+}
+
+function normalizePi(input: PiConfig): PiConfig {
+  return {
+    binaryPath: input.binaryPath,
+    ...(typeof input.realpath === 'string' ? { realpath: input.realpath } : {}),
+    ...(typeof input.version === 'string' ? { version: input.version } : {}),
+    ...(typeof input.sha256 === 'string' ? { sha256: input.sha256 } : {}),
+    ...(typeof input.owner === 'number' ? { owner: input.owner } : {}),
+    ...(typeof input.mode === 'number' ? { mode: input.mode } : {}),
+    ...(typeof input.agentDir === 'string' && input.agentDir.trim()
+      ? { agentDir: input.agentDir.trim() }
+      : {}),
+    inheritAgentDir: input.inheritAgentDir !== false,
+    approveProject: input.approveProject !== false,
+  };
 }
 
 function normalizeComments(_input: unknown): CommentConfig {

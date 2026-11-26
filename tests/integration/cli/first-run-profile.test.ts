@@ -157,6 +157,63 @@ describe('first-run profile bootstrap', () => {
     }
   });
 
+  it('bootstraps a Pi profile by resolving the pi binary', async () => {
+    const root = await makeRoot();
+    const pi = await writeVersionExecutable(root, 'pi', '1.6.0');
+    const oldPi = process.env.LARK_CHANNEL_PI_BIN;
+    process.env.LARK_CHANNEL_PI_BIN = process.platform === 'win32' ? pi : 'pi';
+    const oldPath = process.env.PATH;
+    process.env.PATH = root;
+    try {
+      const profile = await createBootstrapProfileConfig({
+        agentKind: 'pi',
+        accounts: { app: { id: 'cli_pi', secret: '${APP_SECRET}', tenant: 'feishu' } },
+      });
+
+      expect(profile.agentKind).toBe('pi');
+      expect(profile.pi?.binaryPath).toBe(pi);
+      // No Codex block is invented for a Pi profile.
+      expect(profile.codex).toBeUndefined();
+    } finally {
+      process.env.PATH = oldPath;
+      if (oldPi === undefined) {
+        delete process.env.LARK_CHANNEL_PI_BIN;
+      } else {
+        process.env.LARK_CHANNEL_PI_BIN = oldPi;
+      }
+    }
+  });
+
+  it('detects an installed pi binary alongside the other agents', async () => {
+    const root = await makeRoot();
+    const pi = await writeVersionExecutable(root, 'pi', '1.6.0');
+    const oldPath = process.env.PATH;
+    const olds = {
+      claude: process.env.LARK_CHANNEL_CLAUDE_BIN,
+      codex: process.env.LARK_CHANNEL_CODEX_BIN,
+      pi: process.env.LARK_CHANNEL_PI_BIN,
+    };
+    process.env.PATH = root;
+    process.env.LARK_CHANNEL_CLAUDE_BIN = 'missing-claude';
+    process.env.LARK_CHANNEL_CODEX_BIN = 'missing-codex';
+    process.env.LARK_CHANNEL_PI_BIN = process.platform === 'win32' ? pi : 'pi';
+    try {
+      await expect(detectInstalledAgents()).resolves.toEqual([{ kind: 'pi', binaryPath: pi }]);
+    } finally {
+      process.env.PATH = oldPath;
+      for (const [key, value] of Object.entries(olds)) {
+        const envKey =
+          key === 'claude'
+            ? 'LARK_CHANNEL_CLAUDE_BIN'
+            : key === 'codex'
+              ? 'LARK_CHANNEL_CODEX_BIN'
+              : 'LARK_CHANNEL_PI_BIN';
+        if (value === undefined) delete process.env[envKey];
+        else process.env[envKey] = value;
+      }
+    }
+  });
+
   it('resolves Windows-style PATHEXT command shims from PATH', async () => {
     const root = await makeRoot();
     await writeExecutable(root, 'codex.cmd', '@echo off\r\necho codex 1.2.3\r\n');
