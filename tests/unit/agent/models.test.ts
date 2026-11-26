@@ -46,3 +46,16 @@ describe('agent model catalog', () => {
     expect(modelLabel('claude', DEFAULT_MODEL)).toContain('跟随默认');
   });
 });
+
+describe('Pi model catalog', () => {
+  it('offers only the default sentinel, since Pi resolves ids from its own provider catalog', () => {
+    expect(supportedModels('pi')).toEqual([{ value: DEFAULT_MODEL, label: expect.any(String) }]);
+  });
+
+  it('does not forward a model flag and coerces cross-agent leftovers', () => {
+    expect(resolveModelArg('pi', undefined)).toBeUndefined();
+    expect(resolveModelArg('pi', 'claude-opus-4-8')).toBeUndefined();
+    expect(normalizeModelSelection('pi', 'gpt-5-codex')).toBe(DEFAULT_MODEL);
+    expect(modelLabel('pi', undefined)).toContain('跟随默认');
+  });
+});

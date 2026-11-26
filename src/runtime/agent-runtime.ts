@@ -1,9 +1,10 @@
 import { ClaudeAdapter } from '../agent/claude/adapter';
 import { CodexAdapter } from '../agent/codex/adapter';
+import { PiAdapter } from '../agent/pi/adapter';
 import { AgentPreflightError, type AgentAvailability } from '../agent/preflight';
 import type { AgentAdapter } from '../agent/types';
 import type { AppPaths } from '../config/app-paths';
-import type { AgentKind, ProfileConfig } from '../config/profile-schema';
+import { isAgentKind, type AgentKind, type ProfileConfig } from '../config/profile-schema';
 import type { AcquiredRuntimeLock } from './locks';
 
 /**
@@ -33,6 +34,21 @@ export function createRuntimeAgent(
             : {}),
         }
       : undefined;
+  if (profileConfig.agentKind === 'pi') {
+    const pi = profileConfig.pi;
+    if (!pi?.binaryPath) {
+      throw new Error('pi profile requires pi.binaryPath');
+    }
+    return new PiAdapter({
+      binary: pi.binaryPath,
+      profileStateDir: appPaths.profileDir,
+      ...(pi.agentDir ? { agentDir: pi.agentDir } : {}),
+      inheritAgentDir: pi.inheritAgentDir !== false,
+      approveProject: pi.approveProject !== false,
+      accessMode: profileConfig.permissions.defaultAccess,
+      larkChannel,
+    });
+  }
   if (profileConfig.agentKind === 'codex') {
     const codex = profileConfig.codex;
     if (!codex?.binaryPath) {
@@ -56,11 +72,12 @@ export async function checkRuntimeAgentAvailability(agent: AgentAdapter): Promis
   if (agent.checkAvailability) return agent.checkAvailability();
   const ok = await agent.isAvailable();
   if (ok) return { ok: true };
+  const agentId = isAgentKind(agent.id) ? agent.id : 'claude';
   const diagnostic = {
     code: 'agent-binary-not-found' as const,
-    agentId: agent.id === 'codex' ? ('codex' as const) : ('claude' as const),
+    agentId,
     agentName: agent.displayName,
-    command: agent.id === 'codex' ? 'codex' : 'claude',
+    command: agentId,
   };
   return { ok: false, diagnostic, error: new AgentPreflightError(diagnostic) };
 }

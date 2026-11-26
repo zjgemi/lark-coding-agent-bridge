@@ -1,7 +1,7 @@
 import { realpath } from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { claudeCapability, codexCapability } from '../../../src/agent/capability.js';
+import { capabilityForProfile } from '../../../src/agent/capability.js';
 import { ActiveRuns } from '../../../src/bot/active-runs.js';
 import { ProcessPool } from '../../../src/bot/process-pool.js';
 import {
@@ -132,7 +132,7 @@ describe('agent-aware run-flow resume', () => {
       scopeId: 'chat-1',
       sessions: claude.sessions,
       sessionCatalog: claude.catalog,
-      capability: claudeCapability(claude.profileConfig),
+      capability: capabilityForProfile(claude.profileConfig),
       policy: claudeRun.policy,
       event: { type: 'system', sessionId: 'sess-recorded', cwd: claudeRun.cwdRealpath },
     });
@@ -157,7 +157,7 @@ describe('agent-aware run-flow resume', () => {
       scopeId: 'chat-1',
       sessions: codex.sessions,
       sessionCatalog: codex.catalog,
-      capability: codexCapability(codex.profileConfig),
+      capability: capabilityForProfile(codex.profileConfig),
       policy: codexRun.policy,
       event: { type: 'system', threadId: 'thread-recorded' },
     });
@@ -171,10 +171,65 @@ describe('agent-aware run-flow resume', () => {
       }),
     ).toMatchObject({ threadId: 'thread-recorded' });
     expect(codex.sessions.getRaw('chat-1')).toBeUndefined();
+
+    // Pi resumes by session id from the same catalog slot as Codex threads.
+    const pi = await createHarness('pi');
+    const piRun = await start(pi);
+    expect(piRun.ok).toBe(true);
+    if (!piRun.ok) throw new Error('expected pi run');
+    await collect(piRun.execution.subscribe());
+
+    recordRunSessionEvent({
+      scopeId: 'chat-1',
+      sessions: pi.sessions,
+      sessionCatalog: pi.catalog,
+      capability: capabilityForProfile(pi.profileConfig),
+      policy: piRun.policy,
+      event: { type: 'system', threadId: 'pi-sess-recorded' },
+    });
+
+    expect(
+      pi.catalog.activeFor({
+        scopeId: 'chat-1',
+        agentId: 'pi',
+        cwdRealpath: piRun.cwdRealpath,
+        policyFingerprint: piRun.policy.policyFingerprint,
+      }),
+    ).toMatchObject({ threadId: 'pi-sess-recorded' });
+    expect(pi.sessions.getRaw('chat-1')).toBeUndefined();
+  });
+
+  it('resumes a Pi session from the catalog and passes it as threadId', async () => {
+    const h = await createHarness('pi');
+    const cwdRealpath = await realpath(h.tmp.workspace);
+    h.sessions.set('chat-1', 'legacy-claude-session', cwdRealpath);
+    const probe = await start(h);
+    expect(probe.ok).toBe(true);
+    if (!probe.ok) throw new Error('expected probe run');
+    await collect(probe.execution.subscribe());
+    h.catalog.upsertActive({
+      scopeId: 'chat-1',
+      agentId: 'pi',
+      cwdRealpath: probe.cwdRealpath,
+      policyFingerprint: probe.policy.policyFingerprint,
+      threadId: 'pi-sess-catalog',
+      now: 1000,
+    });
+
+    const resumed = await start(h);
+
+    expect(resumed.ok).toBe(true);
+    if (!resumed.ok) throw new Error('expected resumed run');
+    expect(resumed.resumeFrom).toBe('pi-sess-catalog');
+    expect(h.agent.runOptions[1]).toMatchObject({
+      sessionId: undefined,
+      threadId: 'pi-sess-catalog',
+      accessMode: 'full',
+    });
   });
 });
 
-async function createHarness(agentKind: 'claude' | 'codex'): Promise<{
+async function createHarness(agentKind: 'claude' | 'codex' | 'pi'): Promise<{
   tmp: TmpProfile;
   agent: FakeAgentAdapter;
   executor: RunExecutor;
@@ -199,6 +254,7 @@ async function createHarness(agentKind: 'claude' | 'codex'): Promise<{
       },
     },
     ...(agentKind === 'codex' ? { codex: { binaryPath: '/usr/local/bin/codex' } } : {}),
+    ...(agentKind === 'pi' ? { pi: { binaryPath: '/usr/local/bin/pi' } } : {}),
   });
   const workspaces = new WorkspaceStore(join(tmp.profile, 'workspaces.json'));
   workspaces.setCwd('chat-1', tmp.workspace);
@@ -244,10 +300,7 @@ async function start(h: Awaited<ReturnType<typeof createHarness>>) {
     prompt: 'hello',
     attachments: [],
     access: { ok: true, reason: 'allowed-user' },
-    capability:
-      h.profileConfig.agentKind === 'codex'
-        ? codexCapability(h.profileConfig)
-        : claudeCapability(h.profileConfig),
+    capability: capabilityForProfile(h.profileConfig),
     profileConfig: h.profileConfig,
     sessions: h.sessions,
     sessionCatalog: h.catalog,

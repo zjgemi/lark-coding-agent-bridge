@@ -60,6 +60,37 @@ describe('start runtime agent factory', () => {
     expect(agent.displayName).toBe('Codex CLI');
   });
 
+  it('creates a PiAdapter carrying the profile access mode and approval policy', () => {
+    const profile = createDefaultProfileConfig({
+      agentKind: 'pi',
+      accounts: appAccount(),
+      pi: { binaryPath: '/usr/local/bin/pi', approveProject: false },
+      permissions: { defaultAccess: 'workspace', maxAccess: 'workspace' },
+    });
+    const agent = createRuntimeAgent(profile, {
+      profileDir: '/tmp/lark-channel-bridge/profiles/pi-e2e',
+    });
+
+    expect(agent.id).toBe('pi');
+    expect(agent.displayName).toBe('Pi');
+    expect(agent.setBotIdentity).toBeTypeOf('function');
+  });
+
+  it('requires a Pi binary path for a Pi profile', () => {
+    const profile = createDefaultProfileConfig({
+      agentKind: 'pi',
+      accounts: appAccount(),
+      pi: { binaryPath: '/usr/local/bin/pi' },
+    });
+    // A profile that lost its binary path must fail loudly instead of spawning
+    // with an empty command.
+    expect(() =>
+      createRuntimeAgent({ ...profile, pi: { ...profile.pi, binaryPath: '' } }, {
+        profileDir: tmpdir(),
+      }),
+    ).toThrow(/pi profile requires pi\.binaryPath/);
+  });
+
   it('seeds a default Codex binary when bootstrapping a new Codex profile', () => {
     const profile = createRuntimeProfileConfig({
       agentKind: 'codex',
@@ -67,6 +98,15 @@ describe('start runtime agent factory', () => {
     });
 
     expect(profile.codex?.binaryPath).toBe('codex');
+  });
+
+  it('seeds a default Pi binary when bootstrapping a new Pi profile', () => {
+    const profile = createRuntimeProfileConfig({
+      agentKind: 'pi',
+      accounts: appAccount(),
+    });
+
+    expect(profile.pi?.binaryPath).toBe('pi');
   });
 
   it('updates the process registry before releasing the old app lock during reconnect', async () => {

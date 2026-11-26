@@ -18,6 +18,7 @@ import {
 } from '../../../src/agent/bridge-system-prompt';
 import { ClaudeAdapter } from '../../../src/agent/claude/adapter';
 import { CodexAdapter } from '../../../src/agent/codex/adapter';
+import { PiAdapter } from '../../../src/agent/pi/adapter';
 
 interface FakeChild extends EventEmitter {
   pid: number;
@@ -122,3 +123,40 @@ async function readAll(stream: PassThrough): Promise<string> {
   }
   return Buffer.concat(chunks).toString('utf8');
 }
+
+describe('PiAdapter system prompt wiring', () => {
+  function piAdapter(): PiAdapter {
+    return new PiAdapter({ binary: '/usr/local/bin/pi', profileStateDir: '/tmp/pi-profile' });
+  }
+
+  it('appends the identity-aware bridge system prompt via a temp file after setBotIdentity', async () => {
+    const child = fakeChild();
+    spawnMock.spawnProcess.mockReturnValue(child);
+    const adapter = piAdapter();
+    adapter.setBotIdentity({ openId: 'ou_bot_self', name: 'Bridge' });
+
+    adapter.run({ runId: 'r1', prompt: 'hi', cwd: '/tmp' });
+
+    // The prompt stays on stdin; the bridge instructions go through a file.
+    expect(await readAll(child.stdin)).toBe('hi');
+    expect(systemPromptFileContent()).toBe(
+      buildBridgeSystemPrompt({ openId: 'ou_bot_self', name: 'Bridge' }),
+    );
+  });
+
+  it('falls back to the base system prompt when no identity was set', async () => {
+    const child = fakeChild();
+    spawnMock.spawnProcess.mockReturnValue(child);
+
+    piAdapter().run({ runId: 'r1', prompt: 'hi', cwd: '/tmp' });
+
+    expect(systemPromptFileContent()).toBe(buildBridgeSystemPrompt(undefined));
+  });
+
+  function systemPromptFileContent(): string {
+    const args = spawnMock.spawnProcess.mock.calls[0]?.[1] as string[];
+    const flagIndex = args.indexOf('--append-system-prompt');
+    expect(flagIndex).toBeGreaterThan(-1);
+    return readFileSync(args[flagIndex + 1] as string, 'utf8');
+  }
+});

@@ -30,6 +30,31 @@ describe('static architecture contracts', () => {
     }
   });
 
+  it('does not route production runs by importing Pi internals in shared bot/card code', () => {
+    const sharedFiles = [
+      ...collectTsFiles('src/bot'),
+      ...collectTsFiles('src/card'),
+      'src/commands/index.ts',
+    ];
+    for (const file of sharedFiles) {
+      expect(read(file), file).not.toMatch(/agent\/pi/);
+    }
+  });
+
+  it('resolves every agent kind through one capability helper', () => {
+    // Agent-kind branching must not be re-derived per call site; the shared
+    // helper is what keeps a newly added agent kind from being forgotten.
+    const sharedFiles = [
+      ...collectTsFiles('src/bot'),
+      ...collectTsFiles('src/meeting'),
+      'src/commands/index.ts',
+    ];
+    for (const file of sharedFiles) {
+      const source = read(file);
+      expect(source, file).not.toMatch(/claudeCapability\(|codexCapability\(|piCapability\(/);
+    }
+  });
+
   it('does not keep legacy open access semantics in config helpers', () => {
     const schema = read('src/config/schema.ts');
     expect(schema).not.toMatch(/legacy-open|access\.semantics/);

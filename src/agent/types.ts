@@ -1,7 +1,11 @@
 import type { AgentAvailability } from './preflight';
-import type { ClaudePermissionMode, CodexSandboxMode } from '../config/permissions';
+import type {
+  AccessMode,
+  ClaudePermissionMode,
+  CodexSandboxMode,
+} from '../config/permissions';
 
-export type { ClaudePermissionMode } from '../config/permissions';
+export type { AccessMode, ClaudePermissionMode } from '../config/permissions';
 
 export type AgentEvent =
   | { type: 'system'; sessionId?: string; threadId?: string; cwd?: string; model?: string }
@@ -36,6 +40,12 @@ export interface AgentRunOptions {
   threadId?: string;
   model?: string;
   images?: readonly string[];
+  /**
+   * Policy access mode for this run. Adapters that expose a native sandbox
+   * (codex, claude) use their own fields below; adapters without one (pi) map
+   * this to their own tool/sandbox restriction.
+   */
+  accessMode?: AccessMode;
   sandbox?: CodexSandboxMode;
   permissionMode?: ClaudePermissionMode;
   /**

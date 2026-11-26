@@ -31,6 +31,8 @@ describe('RunExecutor policy runtime options', () => {
       runId: 'run-policy',
       sandbox: 'workspace-write',
       permissionMode: 'acceptEdits',
+      // Agents without a native sandbox (pi) enforce this instead.
+      accessMode: 'workspace',
     });
 
     await collect(execution.subscribe());

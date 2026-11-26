@@ -6,7 +6,12 @@ import {
   createDefaultProfileConfig,
   type RootConfig,
 } from '../../../src/config/profile-schema';
-import { createRootConfig, loadRootConfig, saveRootConfig } from '../../../src/config/profile-store';
+import {
+  agentKindFromString,
+  createRootConfig,
+  loadRootConfig,
+  saveRootConfig,
+} from '../../../src/config/profile-store';
 
 const roots: string[] = [];
 
@@ -257,5 +262,54 @@ describe('profile store canonical serialization', () => {
     const root = createRootConfig('claude', profile);
 
     expect(root.migrations?.permissionDefaultsV1).toEqual(['claude']);
+  });
+});
+
+describe('profile store — Pi profiles', () => {
+  it('persists the pi config block across save→load round-trip', async () => {
+    const root = await tmpRoot();
+    const configPath = join(root, 'config.json');
+    const profile = createDefaultProfileConfig({
+      agentKind: 'pi',
+      accounts: { app },
+      pi: {
+        binaryPath: '/usr/local/bin/pi',
+        agentDir: '/home/user/.pi/agent',
+        inheritAgentDir: false,
+        approveProject: false,
+      },
+    });
+
+    await saveRootConfig(
+      {
+        schemaVersion: 2,
+        activeProfile: 'pi',
+        preferences: {},
+        profiles: { pi: profile },
+      },
+      configPath,
+    );
+
+    const saved = JSON.parse(await readFile(configPath, 'utf8')) as {
+      profiles: { pi: { agentKind: string; pi?: Record<string, unknown> } };
+    };
+    expect(saved.profiles.pi.agentKind).toBe('pi');
+    expect(saved.profiles.pi.pi).toMatchObject({
+      binaryPath: '/usr/local/bin/pi',
+      agentDir: '/home/user/.pi/agent',
+      inheritAgentDir: false,
+      approveProject: false,
+    });
+
+    const loaded = await loadRootConfig(configPath);
+    expect(loaded?.profiles.pi?.pi).toEqual(saved.profiles.pi.pi);
+    // Pi needs no codex block, and loading must not invent one.
+    expect(loaded?.profiles.pi?.codex).toBeUndefined();
+  });
+
+  it('accepts pi as an --agent kind string', () => {
+    expect(agentKindFromString('pi')).toBe('pi');
+    expect(agentKindFromString(undefined)).toBeUndefined();
+    expect(() => agentKindFromString('gemini')).toThrow(/unsupported agent/);
   });
 });

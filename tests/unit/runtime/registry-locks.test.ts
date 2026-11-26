@@ -3,7 +3,11 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { resolveAppPaths } from '../../../src/config/app-paths';
-import { runtimeLockMetaFile, withProfileAndAppLocks } from '../../../src/runtime/locks';
+import {
+  readRuntimeLockMeta,
+  runtimeLockMetaFile,
+  withProfileAndAppLocks,
+} from '../../../src/runtime/locks';
 import {
   readAndPrune,
   register,
@@ -242,3 +246,32 @@ async function writeJson(path: string, value: unknown): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
   await writeFile(path, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
 }
+
+describe('registry and runtime locks — Pi', () => {
+  it('registers a Pi profile and accepts its lock metadata', async () => {
+    const root = await makeRoot();
+    const registryFile = join(root, 'registry', 'processes.json');
+    const paths = resolveAppPaths({ rootDir: root, profile: 'pi-dev' });
+
+    const registered = await register({
+      appId: 'cli_pi',
+      tenant: 'feishu',
+      profileName: 'pi-dev',
+      agentKind: 'pi',
+      configPath: join(root, 'config.json'),
+      version: '0.1.32',
+      registryFile,
+    });
+
+    expect(readAndPrune(registryFile).map((item) => item.agentKind)).toEqual(['pi']);
+
+    await withProfileAndAppLocks(paths, 'cli_pi', 'pi', async () => {
+      // Lock metadata is validated against the known agent kinds, so a Pi
+      // holder must not be discarded as an unreadable lock.
+      const meta = await readRuntimeLockMeta(paths.profileLockFile);
+      expect(meta?.agentKind).toBe('pi');
+    });
+
+    unregisterSync(registered.id, registryFile);
+  });
+});

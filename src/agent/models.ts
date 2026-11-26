@@ -43,9 +43,24 @@ const CODEX_MODELS: ModelOption[] = [
   { value: 'o3', label: 'o3' },
 ];
 
+/**
+ * Pi resolves `--model` against its own provider catalog (`provider/id`, fuzzy
+ * id or name, optional `:<thinking>` suffix) and that catalog depends on which
+ * providers the account is logged in to. Hard-coding ids here would go stale,
+ * so the picker offers only the default sentinel: Pi picks per its own config.
+ */
+const PI_MODELS: ModelOption[] = [{ value: DEFAULT_MODEL, label: '跟随默认（不指定）' }];
+
 /** The model picker options for a profile's agent kind. */
 export function supportedModels(agentKind: AgentKind): ModelOption[] {
-  return agentKind === 'codex' ? CODEX_MODELS : CLAUDE_MODELS;
+  switch (agentKind) {
+    case 'codex':
+      return CODEX_MODELS;
+    case 'pi':
+      return PI_MODELS;
+    case 'claude':
+      return CLAUDE_MODELS;
+  }
 }
 
 /** True when the selection means "use the agent default" (no `--model`). */
